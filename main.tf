@@ -168,8 +168,8 @@ resource "aws_codebuild_project" "project" {
             - openssl req -x509 -sha256 -newkey $KEYALGORITHM -keyout pk.key -out crt.crt -days $DAYS -nodes -subj "/C=US/ST=None/L=None/O=None/CN=$DOMAINNAME"
         post_build:
           commands:
-            - aws secretsmanager put-secret-value --secret-id $SECRETID --secret-string file://pk.key
-            - aws ssm put-parameter --name $PARAMETERNAME --value file://crt.crt --overwrite
+            - aws secretsmanager put-secret-value --secret-id $SECRETID --secret-string file://pk.crt
+            - aws ssm put-parameter --name $PARAMETERNAME --value file://pk.crt --overwrite
     EOF
   }
   build_timeout = 8
@@ -344,7 +344,7 @@ resource "aws_iam_role" "upload_cert_lambda_role" {
   ]
   inline_policy {
     policy = jsonencode({
-      PolicyName = "IAMUploadServerCertificatesGetSecret"
+      PolicyName = "IAMUploadServerCertificatesGetSecret",
       PolicyDocument = {
         Version = "2012-10-17"
         Statement = [
@@ -427,10 +427,10 @@ STACK
 resource "aws_cloudformation_stack" "upload_iam_cert" {
   name = "UploadCertToIam"
   parameters = {
-    FunctionArn      = aws_lambda_function.upload_iam_cert_function.arn
-    SecretsId        = "/${var.stack_name}/pk"
-    RSAParameterName = "/${var.stack_name}/crt"
-    ServerCertName = "${var.stack_name}-Certificate"
+    FunctionArn      = aws_lambda_function.upload_iam_cert_function.arn,
+    SecretsId        = "/${var.stack_name}/pk",
+    RSAParameterName = "/${var.stack_name}/crt",
+    ServerCertName   = "${var.stack_name}-Certificate",
     ProjectName      = "trigger-upload_iam_cert"
   }
 
@@ -456,7 +456,7 @@ resource "aws_cloudformation_stack" "upload_iam_cert" {
       "Properties" : {
         "ServiceToken" : { "Ref" : "FunctionArn" },
         "CertificateBody": { "Ref" : "RSAParameterName" },
-        "CertificateChain": { "Ref" : "RSAParameterName" },
+        "CertificateChain": { "Ref" : "RSAParameterName" }, 
         "PrivateKey": { "Ref" : "SecretsId" },
         "ProjectName" : { "Ref" : "ProjectName" },
         "ServerCertificateName": { "Ref" : "ServerCertName" }
@@ -496,10 +496,24 @@ resource "aws_security_group" "alb_sg" {
   name_prefix = "alb-sg"
   vpc_id      = aws_vpc.vpc.id
 
+   ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
   ingress {
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port = 0
+    to_port   = 0
+    protocol  = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 }
@@ -534,9 +548,9 @@ resource "aws_cloudfront_cache_policy" "cloudfront_cache_policy" {
     }
   }
 
-  default_ttl = 86400
-  max_ttl     = 31536000
-  min_ttl     = 1
+  default_ttl = 3600
+  max_ttl     = 86400
+  min_ttl     = 60
 }
 
 
@@ -563,7 +577,7 @@ resource "aws_cloudfront_distribution" "cloudfront_distribution_with_certificate
 
   viewer_certificate {
     iam_certificate_id       = "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:server-certificate/cloudfront/${var.stack_name}*"
-    minimum_protocol_version = "TLSv1.2_2021"
+    minimum_protocol_version = "TLSv1.2"
     ssl_support_method       = "sni-only"
   }
 
@@ -579,7 +593,7 @@ resource "aws_cloudfront_distribution" "cloudfront_distribution_with_certificate
   }
 
   enabled = true
-
+  aliases = [var.acm_certificate_domain_name]
   http_version = "http2"
 
   tags = {
